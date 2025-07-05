@@ -5,8 +5,8 @@ import os
 
 app = Flask(__name__)
 
-# Connect to MongoDB
-client = MongoClient(os.getenv('MONGO_URI'))  # use dotenv or hardcode for now
+# Connect to MongoDB (You can hardcode this if .env fails)
+client = MongoClient(os.getenv('MONGO_URI', 'mongodb://localhost:27017/'))
 db = client.github_events
 collection = db.events
 
@@ -17,37 +17,43 @@ def index():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-
-    # Determine action type
     event = request.headers.get('X-GitHub-Event')
+
+    print(f"Received event: {event}")
+
     parsed = {}
 
-    if event == "push":
-        parsed = {
-            "type": "push",
-            "author": data["pusher"]["name"],
-            "to_branch": data["ref"].split('/')[-1],
-            "timestamp": datetime.utcnow()
-        }
+    try:
+        if event == "push":
+            parsed = {
+                "type": "push",
+                "author": data.get("pusher", {}).get("name", "unknown"),
+                "to_branch": data.get("ref", "").split("/")[-1],
+                "timestamp": datetime.utcnow()
+            }
 
-    elif event == "pull_request":
-        pr = data["pull_request"]
-        parsed = {
-            "type": "pull_request",
-            "author": pr["user"]["login"],
-            "from_branch": pr["head"]["ref"],
-            "to_branch": pr["base"]["ref"],
-            "timestamp": datetime.utcnow()
-        }
+        elif event == "pull_request":
+            pr = data.get("pull_request", {})
+            parsed = {
+                "type": "pull_request",
+                "author": pr.get("user", {}).get("login", "unknown"),
+                "from_branch": pr.get("head", {}).get("ref", "unknown"),
+                "to_branch": pr.get("base", {}).get("ref", "unknown"),
+                "merged": pr.get("merged", False),
+                "timestamp": datetime.utcnow()
+            }
 
-    elif event == "merge":
-        # GitHub doesn't send separate "merge" event. Handle in `pull_request` if `merged == true`
-        pass
+        if parsed:
+            collection.insert_one(parsed)
+            print("Stored event:", parsed)
+        else:
+            print("Unrecognized or incomplete event data.")
 
-    if parsed:
-        collection.insert_one(parsed)
+    except Exception as e:
+        print("Error parsing webhook:", e)
+        return jsonify({"status": "error", "message": str(e)}), 400
 
-    return '', 204
+    return jsonify({"status": "success"}), 200
 
 @app.route('/events', methods=['GET'])
 def get_events():
